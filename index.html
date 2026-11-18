@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>위치별 전기차 충전소 실시간 통합 대시보드</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap');
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .leaflet-container { background-color: #f1f5f9 !important; }
+    .leaflet-popup-content-wrapper {
+      border-radius: 14px !important;
+      padding: 0 !important;
+      overflow: hidden;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.18) !important;
+    }
+    .leaflet-popup-content { margin: 0 !important; line-height: 1.5; }
+    .marker-2d-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+      transition: transform 0.18s ease;
+      transform-origin: bottom center;
+    }
+    .marker-2d-wrapper:hover { transform: scale(1.12) translateY(-2px); z-index: 1000 !important; }
+    .marker-2d-tail {
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      margin-top: -1px;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased h-screen flex flex-col overflow-hidden">
+
+  <!-- 헤더 -->
+  <header class="bg-white border-b border-slate-200 px-5 py-3 flex-shrink-0 flex items-center justify-between shadow-sm z-30">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-white shadow-md">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <h1 class="text-lg font-bold text-slate-900 leading-tight">위치별 전기차 충전소 실시간 대시보드</h1>
+          <span id="api-status-badge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse mr-1.5"></span>API 연동 준비중
+          </span>
+        </div>
+        <p class="text-xs text-slate-500">한국환경공단 OpenAPI 실시간 가용 슬롯 · 에버온(EV) 및 전체 사업자 통합 조회</p>
+      </div>
+    </div>
+
+    <div class="flex items-center space-x-2.5">
+      <div class="hidden md:flex items-center space-x-1.5 text-xs text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+        <span class="font-medium">기준 위치:</span>
+        <span id="current-location-text" class="font-bold text-emerald-700">경기 고양시 일산동구 (37.658, 126.764)</span>
+        <button id="btn-change-location" class="ml-1 text-xs text-blue-600 hover:text-blue-800 underline font-medium">위치변경</button>
+      </div>
+      <button id="btn-refresh" class="inline-flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium rounded-lg shadow-sm transition-colors">
+        <svg class="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        <span>새로고침</span>
+        <span id="refresh-countdown" class="ml-1 text-slate-400 font-mono">(60s)</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 메인 레이아웃 -->
+  <main class="flex-1 flex flex-col overflow-hidden">
+    <!-- 상단 KPI 요약 바 -->
+    <section class="bg-white border-b border-slate-200 px-5 py-2.5 flex-shrink-0 grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-slate-500">조회 충전소</p>
+          <p class="text-xl font-bold text-slate-900 mt-0.5"><span id="kpi-total-stations">0</span><span class="text-xs font-normal text-slate-500 ml-0.5">개소</span></p>
+        </div>
+        <div class="w-9 h-9 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center font-bold">📍</div>
+      </div>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-slate-500">총 충전기 슬롯</p>
+          <p class="text-xl font-bold text-slate-900 mt-0.5"><span id="kpi-total-chargers">0</span><span class="text-xs font-normal text-slate-500 ml-0.5">대</span></p>
+        </div>
+        <div class="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">🔌</div>
+      </div>
+
+      <div class="bg-emerald-50/70 border border-emerald-200 rounded-xl p-2.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-emerald-800">즉시 충전 가능</p>
+          <div class="flex items-baseline mt-0.5 space-x-1.5">
+            <p class="text-xl font-extrabold text-emerald-700"><span id="kpi-available-chargers">0</span><span class="text-xs font-normal text-emerald-600 ml-0.5">대</span></p>
+            <span id="kpi-available-rate" class="text-xs font-medium text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">0%</span>
+          </div>
+        </div>
+        <div class="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold">✓</div>
+      </div>
+
+      <div class="bg-amber-50/70 border border-amber-200 rounded-xl p-2.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-amber-800">현재 충전중</p>
+          <p class="text-xl font-bold text-amber-700 mt-0.5"><span id="kpi-inuse-chargers">0</span><span class="text-xs font-normal text-amber-600 ml-0.5">대</span></p>
+        </div>
+        <div class="w-9 h-9 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center font-bold">⚡</div>
+      </div>
+
+      <div class="col-span-2 md:col-span-1 bg-rose-50/70 border border-rose-200 rounded-xl p-2.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-rose-800">고장 / 점검중</p>
+          <p class="text-xl font-extrabold text-rose-700 mt-0.5"><span id="kpi-broken-chargers">0</span><span class="text-xs font-normal text-rose-600 ml-0.5">대</span></p>
+        </div>
+        <div class="w-9 h-9 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center font-bold">⚠️</div>
+      </div>
+    </section>
+
+    <!-- 좌측 리스트 + 우측 지도 -->
+    <div class="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+      <!-- 좌측 패널 -->
+      <aside class="w-full lg:w-[450px] xl:w-[470px] bg-white border-r border-slate-200 flex flex-col flex-shrink-0 z-20 h-1/2 lg:h-full">
+        <!-- 실시간 API 지역 호출 바 -->
+        <div class="px-4 py-2.5 bg-slate-900 text-white flex items-center justify-between gap-2 border-b border-slate-700">
+          <div class="flex items-center space-x-1.5 flex-1 min-w-0">
+            <span class="text-xs">🔌</span>
+            <select id="select-api-region" class="w-full text-[11px] font-bold bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-emerald-300 focus:outline-none">
+              <option value="zscode:41280" selected>경기도 고양시 전체 (실시간 API)</option>
+              <option value="zscode:41570">경기도 김포시 전체 (실시간 API)</option>
+              <option value="zscode:41480">경기도 파주시 전체 (실시간 API)</option>
+              <option value="zscode:41130">경기도 성남시 분당/판교 (실시간 API)</option>
+              <option value="zscode:41110">경기도 수원시 전체 (실시간 API)</option>
+              <option value="zscode:41460">경기도 용인시 전체 (실시간 API)</option>
+              <option value="zscode:41590">경기도 화성시 동탄 (실시간 API)</option>
+              <option value="zscode:11680">서울 강남구 전체 (실시간 API)</option>
+              <option value="zscode:11650">서울 서초구 전체 (실시간 API)</option>
+              <option value="zscode:11710">서울 송파구 전체 (실시간 API)</option>
+              <option value="zscode:11440">서울 마포구 전체 (실시간 API)</option>
+              <option value="zscode:11560">서울 영등포구 전체 (실시간 API)</option>
+              <option value="zscode:11140">서울 중구 전체 (실시간 API)</option>
+              <option value="zcode:11">서울특별시 전역 (최대 1,000건)</option>
+              <option value="zcode:41">경기도 전역 (최대 1,000건)</option>
+            </select>
+          </div>
+          <button id="btn-fetch-live-api" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-lg transition-colors flex-shrink-0">
+            실시간 불러오기
+          </button>
+        </div>
+
+        <!-- 검색 및 필터 -->
+        <div class="p-4 border-b border-slate-200 bg-white space-y-2.5">
+          <div class="relative">
+            <input type="text" id="input-search" placeholder="충전소명, 주소 검색 (예: 중부대, 에버온, 킨텍스)" class="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg pl-8 pr-8 py-2 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+            <svg class="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <button id="btn-clear-search" class="hidden absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600">✕</button>
+          </div>
+
+          <div class="flex items-center space-x-1.5">
+            <span class="text-[11px] font-medium text-slate-500 w-11 flex-shrink-0">속도:</span>
+            <div class="flex flex-wrap gap-1" id="filter-speed-group">
+              <button data-speed="ALL" class="speed-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-800 text-white">전체</button>
+              <button data-speed="RAPID" class="speed-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">급속</button>
+              <button data-speed="SLOW" class="speed-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">완속</button>
+            </div>
+          </div>
+
+          <div class="flex items-center space-x-1.5">
+            <span class="text-[11px] font-medium text-slate-500 w-11 flex-shrink-0">상태:</span>
+            <div class="flex flex-wrap gap-1" id="filter-status-group">
+              <button data-status="ALL" class="status-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-800 text-white">전체</button>
+              <button data-status="AVAILABLE" class="status-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">충전가능만</button>
+              <button data-status="ALERT" class="status-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">고장/점검</button>
+            </div>
+          </div>
+
+          <div class="flex items-center space-x-1.5">
+            <span class="text-[11px] font-medium text-slate-500 w-11 flex-shrink-0">사업자:</span>
+            <div class="flex flex-wrap gap-1" id="filter-operator-group">
+              <button data-op="ALL" class="op-btn px-2 py-0.5 text-[11px] rounded-md font-medium bg-slate-800 text-white">전체</button>
+              <button data-op="EV" class="op-btn px-2 py-0.5 text-[11px] rounded-md font-bold bg-teal-50 text-teal-800 border border-teal-300 hover:bg-teal-100">에버온(EV)</button>
+              <button data-op="ME" class="op-btn px-2 py-0.5 text-[11px] rounded-md font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">환경부(ME)</button>
+              <button data-op="OTHER" class="op-btn px-2 py-0.5 text-[11px] rounded-md font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">기타</button>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
+            <span class="text-slate-500 font-medium">검색 결과 <span id="filtered-count" class="font-bold text-slate-900">0</span>건</span>
+            <div class="flex items-center space-x-1">
+              <span class="text-slate-400">정렬:</span>
+              <select id="select-sort" class="text-xs bg-transparent border-0 font-semibold text-slate-700 focus:ring-0 cursor-pointer">
+                <option value="DISTANCE">거리 가까운순</option>
+                <option value="AVAILABLE">가용 많은순</option>
+                <option value="SPEED">급속 우선</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 충전소 리스트 -->
+        <div id="station-list-container" class="flex-1 overflow-y-auto p-3 space-y-2.5 custom-scrollbar bg-slate-50"></div>
+      </aside>
+
+      <!-- 우측 2D 평면 지도 -->
+      <div class="flex-1 flex flex-col h-1/2 lg:h-full relative">
+        <div id="map" class="w-full flex-1 z-10"></div>
+
+        <!-- 지도 모드(카카오맵/스카이뷰 또는 위성 폴백) 및 내 위치 지정 패널 -->
+        <div class="absolute top-4 left-4 z-20 flex flex-col gap-2">
+          <div id="kakao-layer-bar" class="hidden bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl p-1.5 shadow-lg flex items-center space-x-1">
+            <button data-klayer="ROADMAP" class="klayer-btn px-3 py-1.5 rounded-lg bg-slate-900 text-white font-bold text-xs transition-colors">🗺️ 카카오 일반지도</button>
+            <button data-klayer="HYBRID" class="klayer-btn px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors">🛰️ 스카이뷰</button>
+          </div>
+
+          <button id="btn-map-pick-mode" class="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3 py-2 rounded-xl shadow-lg flex items-center justify-center space-x-1.5 transition-all">
+            <span>📍</span>
+            <span>지도 클릭으로 내 위치 지정 (오차 0m)</span>
+          </button>
+        </div>
+
+        <!-- 지도 클릭 지정 안내 배너 -->
+        <div id="banner-map-pick" class="hidden absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-blue-600 text-white px-4 py-2 rounded-full shadow-xl text-xs font-bold flex items-center space-x-3">
+          <span>🎯 지도 위에서 내 위치를 클릭하세요!</span>
+          <button id="btn-cancel-map-pick" class="bg-white/20 hover:bg-white/30 px-2 py-0.5 rounded-full text-[11px]">취소</button>
+        </div>
+
+        <!-- 마커 범례 -->
+        <div class="absolute top-4 right-4 z-20 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-xl p-3 shadow-lg text-xs space-y-1.5">
+          <div class="font-bold text-slate-900 text-[11px] pb-1 border-b border-slate-100">마커 상태 범례</div>
+          <div class="flex items-center space-x-2"><span class="w-3 h-3 rounded-full bg-emerald-500"></span><span>충전 가능 (2대+)</span></div>
+          <div class="flex items-center space-x-2"><span class="w-3 h-3 rounded-full bg-amber-500"></span><span>혼잡 (1대 남음)</span></div>
+          <div class="flex items-center space-x-2"><span class="w-3 h-3 rounded-full bg-rose-500"></span><span>충전 불가/고장</span></div>
+        </div>
+
+        <div class="bg-white border-t border-slate-200 px-4 py-2 z-20 flex items-center justify-between text-xs text-slate-600">
+          <span>한국환경공단(KECO) `getChargerInfo` 실시간 OpenAPI 연동</span>
+          <button id="btn-toggle-stats" class="text-slate-700 hover:text-emerald-700 font-semibold px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200">
+            가용성 차트 보기
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 상세 모달 -->
+  <div id="modal-station-detail" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50">
+        <div>
+          <div class="flex items-center space-x-2">
+            <span id="modal-station-operator" class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700">운영기관</span>
+            <h3 id="modal-station-name" class="text-base font-bold text-slate-900">충전소명</h3>
+          </div>
+          <p id="modal-station-address" class="text-xs text-slate-500 mt-1">주소</p>
+        </div>
+        <button id="btn-close-modal" class="text-slate-400 hover:text-slate-600 p-1">✕</button>
+      </div>
+      <div class="p-5 overflow-y-auto space-y-4 custom-scrollbar text-xs">
+        <div id="modal-ai-diagnosis" class="p-3.5 rounded-xl border flex items-start space-x-3"></div>
+        <div class="grid grid-cols-2 gap-2 text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+          <div><span class="text-slate-400">주차 요금:</span> <span id="modal-parking-fee" class="font-medium text-slate-800">-</span></div>
+          <div><span class="text-slate-400">운영 시간:</span> <span id="modal-operating-time" class="font-medium text-slate-800">-</span></div>
+          <div><span class="text-slate-400">현재 거리:</span> <span id="modal-distance" class="font-medium text-emerald-700">-</span></div>
+          <div><span class="text-slate-400">충전기 규격:</span> <span id="modal-connector-types" class="font-medium text-slate-800">-</span></div>
+        </div>
+        <div class="bg-slate-900 text-slate-200 p-3 rounded-xl font-mono text-[11px] space-y-1">
+          <div class="text-emerald-400 font-sans font-bold text-xs pb-1 border-b border-slate-700">OpenAPI 응답 정보</div>
+          <div class="grid grid-cols-2 gap-1 pt-1">
+            <div><span class="text-slate-400">busiId:</span> <span id="modal-api-busiid" class="text-white font-bold">-</span></div>
+            <div><span class="text-slate-400">statId:</span> <span id="modal-api-statid" class="text-amber-300 font-bold">-</span></div>
+            <div><span class="text-slate-400">zscode:</span> <span id="modal-api-zscode">-</span></div>
+            <div><span class="text-slate-400">연락처:</span> <span id="modal-api-call">-</span></div>
+          </div>
+        </div>
+        <div>
+          <h4 class="font-bold text-slate-900 mb-2">충전기별 실시간 현황 (<span id="modal-slot-count">0</span>기)</h4>
+          <div id="modal-chargers-list" class="space-y-2"></div>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50 flex justify-end space-x-2">
+        <button id="btn-copy-address" class="px-3 py-2 bg-white border border-slate-300 text-slate-700 font-semibold rounded-lg text-xs">주소 복사</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 위치 변경 모달 -->
+  <div id="modal-location" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-3">
+      <h3 class="text-sm font-bold text-slate-900">기준 위치 선택</h3>
+      <div class="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+        <button data-loc="goyang_ilsan" class="loc-select-btn w-full text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-400 text-xs font-semibold">경기 고양시 일산동구 (37.6583, 126.7644)</button>
+        <button data-loc="goyang_joongbu" class="loc-select-btn w-full text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-400 text-xs font-semibold">경기 고양시 덕양구 중부대학교 고양캠퍼스</button>
+        <button data-loc="gimpo_geolpo" class="loc-select-btn w-full text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-400 text-xs font-semibold">경기 김포시 걸포북변역</button>
+        <button data-loc="seoul_gangnam" class="loc-select-btn w-full text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-400 text-xs font-semibold">서울 강남구 강남역</button>
+        <button data-loc="seoul_mapo" class="loc-select-btn w-full text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-400 text-xs font-semibold">서울 마포구 상암동</button>
+      </div>
+      <div class="flex justify-end">
+        <button id="btn-close-location-modal" class="px-4 py-1.5 bg-slate-800 text-white rounded-lg text-xs">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 차트 모달 -->
+  <div id="modal-stats" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <h3 class="text-sm font-bold text-slate-900">충전기 가용 현황 분석</h3>
+        <button id="btn-close-stats-modal" class="text-slate-400 hover:text-slate-600">✕</button>
+      </div>
+      <div class="py-4 relative h-64">
+        <canvas id="chart-status-breakdown"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 토스트 -->
+  <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center space-x-2 text-xs pointer-events-none">
+    <span id="toast-icon">ℹ️</span>
+    <span id="toast-message">알림</span>
+  </div>
+
+  <script>
+    const API_KEY = "f28bc0c88bfd39410ebea80fc7db6da8c752d17854c1575a97002ca645b12c35";
+
+    const CHGER_TYPE_MAP = {
+      "01": "DC차데모", "02": "AC완속", "03": "DC차데모+AC3상", "04": "DC콤보",
+      "05": "DC차데모+DC콤보", "06": "DC차데모+AC3상+DC콤보", "07": "AC3상",
+      "08": "DC콤보(완속)", "09": "NACS", "10": "DC콤보+NACS", "11": "DC콤보2(버스)"
+    };
+
+    const ZCODE_NAME_MAP = {
+      "11": "서울특별시", "26": "부산광역시", "27": "대구광역시", "28": "인천광역시",
+      "29": "광주광역시", "30": "대전광역시", "31": "울산광역시", "36": "세종특별자치시",
+      "41": "경기도", "43": "충청북도", "44": "충청남도", "46": "전라남도",
+      "47": "경상북도", "48": "경상남도", "50": "제주특별자치도", "51": "강원특별자치도", "52": "전북특별자치도"
+    };
+
+    let STATIONS_DATA = [];
+
+    const state = {
+      userLoc: { id: "goyang_ilsan", name: "경기 고양시 일산동구", lat: 37.6583, lng: 126.7644 },
+      filters: { speed: "ALL", status: "ALL", operator: "ALL", search: "", sort: "DISTANCE" },
+      selectedStationId: null,
+      countdown: 60,
+      map: null,
+      markers: {},
+      userMarker: null,
+      statusChart: null,
+      tileLayers: {},
+      activeLayer: "satellite",
+      pickingLocationOnMap: false,
+      mapEngine: "leaflet", // "kakao" | "leaflet"
+      kakaoMap: null,
+      kakaoOverlays: [],
+      kakaoInfoWindow: null,
+      kakaoUserOverlay: null
+    };
+
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      return (R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(1);
+    }
+
+    function mapKecoStat(statCode) {
+      const code = String(statCode || "").trim();
+      if (code === "2") return { status: "AVAILABLE", statusName: "충전대기" };
+      if (code === "3") return { status: "IN_USE", statusName: "충전중" };
+      if (code === "1") return { status: "BROKEN", statusName: "통신이상", faultReason: "통신이상 (코드 1)" };
+      if (code === "4") return { status: "BROKEN", statusName: "운영중지", faultReason: "운영중지 (코드 4)" };
+      if (code === "5") return { status: "BROKEN", statusName: "점검중", faultReason: "점검중 (코드 5)" };
+      return { status: "BROKEN", statusName: "상태미확인", faultReason: `상태미확인 (${code || "0"})` };
+    }
+
+    function parseKecoItemsToStations(items) {
+      const grouped = new Map();
+      items.forEach(item => {
+        const statId = item.statId || `UNK_${item.lat}_${item.lng}`;
+        const lat = parseFloat(item.lat);
+        const lng = parseFloat(item.lng);
+        if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return;
+
+        if (!grouped.has(statId)) {
+          grouped.set(statId, {
+            id: statId,
+            statId: statId,
+            busiId: item.busiId || "ME",
+            zscode: String(item.zscode || ""),
+            busiCall: item.busiCall || "-",
+            name: item.statNm || "이름 없는 충전소",
+            sido: ZCODE_NAME_MAP[String(item.zcode || "41")] || "경기도",
+            address: `${item.addr || ""}${item.addrDetail ? " " + item.addrDetail : ""}${item.location ? " (" + item.location + ")" : ""}`,
+            lat,
+            lng,
+            operator: item.bnm || item.busiNm || item.busiId || "기타",
+            parkingFee: item.parkingFree === "Y" ? "무료" : (item.parkingFree === "N" ? "유료" : "현장 확인"),
+            operatingTime: item.useTime || "24시간 이용가능",
+            chargers: []
+          });
+        }
+
+        const st = grouped.get(statId);
+        const chgId = String(item.chgerId || st.chargers.length + 1).padStart(2, "0");
+        if (!st.chargers.some(c => c.id === chgId)) {
+          const statInfo = mapKecoStat(item.stat);
+          const pw = parseInt(item.output, 10) || (item.chgerType === "02" || item.chgerType === "08" ? 7 : 50);
+          st.chargers.push({
+            id: chgId,
+            type: CHGER_TYPE_MAP[String(item.chgerType || "02").padStart(2, "0")] || "전기차 충전기",
+            power: pw,
+            status: statInfo.status,
+            statusName: statInfo.statusName,
+            faultReason: statInfo.faultReason || item.note || undefined
+          });
+        }
+      });
+      return Array.from(grouped.values());
+    }
+
+    async function fetchLiveKecoData(regionParam = null) {
+      const regionEl = document.getElementById("select-api-region");
+      const rawParam = regionParam || (regionEl ? regionEl.value : "zscode:41280");
+      const [paramKey, paramVal] = rawParam.split(":");
+      const numOfRows = paramKey === "zcode" ? 1000 : 9999;
+
+      const badgeEl = document.getElementById("api-status-badge");
+      const btnFetch = document.getElementById("btn-fetch-live-api");
+
+      if (badgeEl) {
+        badgeEl.className = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800";
+        badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping mr-1.5"></span>실시간 API 수신중...`;
+      }
+      if (btnFetch) {
+        btnFetch.disabled = true;
+        btnFetch.textContent = "수신중...";
+      }
+
+      const baseUrl = `https://apis.data.go.kr/B552584/EvCharger/getChargerInfo?serviceKey=${encodeURIComponent(API_KEY)}&pageNo=1&numOfRows=${numOfRows}&dataType=JSON&${paramKey}=${paramVal}`;
+      const attemptUrls = [
+        baseUrl,
+        `https://corsproxy.io/?url=${encodeURIComponent(baseUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(baseUrl)}`
+      ];
+
+      let jsonData = null;
+      let lastErr = "";
+
+      for (const url of attemptUrls) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort("timeout"), 15000);
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timer);
+          if (!res.ok) {
+            lastErr = `HTTP ${res.status}`;
+            continue;
+          }
+          const text = await res.text();
+          if (!text || text.trim().startsWith("<")) {
+            if (text && text.includes("LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR")) {
+              lastErr = "일일 API 요청 한도 초과 (자정 00:00 초기화)";
+            } else {
+              lastErr = "XML 인증/응답 오류";
+            }
+            continue;
+          }
+          const parsed = JSON.parse(text);
+          if (parsed && parsed.items && parsed.items.item) {
+            jsonData = parsed;
+            break;
+          } else if (parsed && parsed.OpenAPI_ServiceResponse && parsed.OpenAPI_ServiceResponse.cmmMsgHeader) {
+            const hdr = parsed.OpenAPI_ServiceResponse.cmmMsgHeader;
+            if (hdr.returnReasonCode === "22" || (hdr.errMsg && hdr.errMsg.includes("EXCEEDS"))) {
+              lastErr = "일일 API 요청 한도 초과 (자정 00:00 초기화)";
+            } else {
+              lastErr = hdr.returnAuthMsg || hdr.errMsg || "API 인증 오류";
+            }
+          } else if (parsed && parsed.header && parsed.header.resultCode !== "00") {
+            lastErr = parsed.header.resultMsg || `코드 ${parsed.header.resultCode}`;
+          }
+        } catch (err) {
+          clearTimeout(timer);
+          lastErr = err.name === "AbortError" ? "응답 시간 초과" : (err.message || "CORS/네트워크 차단");
+        }
+      }
+
+      if (btnFetch) {
+        btnFetch.disabled = false;
+        btnFetch.textContent = "실시간 불러오기";
+      }
+
+      if (jsonData && jsonData.items && jsonData.items.item) {
+        const rawItems = Array.isArray(jsonData.items.item) ? jsonData.items.item : [jsonData.items.item];
+        STATIONS_DATA = parseKecoItemsToStations(rawItems);
+        const evCount = STATIONS_DATA.filter(s => s.busiId === "EV").length;
+        if (badgeEl) {
+          badgeEl.className = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800";
+          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse mr-1.5"></span>실시간 연동됨 (${STATIONS_DATA.length}개소 · 에버온 ${evCount}개소)`;
+        }
+        renderApp(true);
+        showToast(`✅ 실시간 수신 완료! ${STATIONS_DATA.length}개 충전소 (에버온 ${evCount}개소)`, "⚡");
+      } else {
+        if (badgeEl) {
+          badgeEl.className = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800";
+          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5"></span>API 직접연동 차단 (${lastErr})`;
+        }
+        showToast(`⚠️ API 연동 실패 (${lastErr})`, "⚠️");
+      }
+    }
+
+    const KAKAO_JS_KEY = "1b2cfea6da6ed1188eed9a7ef3b93cea";
+
+    function initLeafletFallback() {
+      state.mapEngine = "leaflet";
+      state.map = L.map("map", { zoomControl: true, attributionControl: false, maxZoom: 18, minZoom: 6 }).setView([state.userLoc.lat, state.userLoc.lng], 12);
+      state.tileLayers.satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+        maxNativeZoom: 15,
+        maxZoom: 18
+      });
+      state.tileLayers.satellite.addTo(state.map);
+
+      state.map.on("click", e => {
+        if (state.pickingLocationOnMap) {
+          applyPickedLocation(Number(e.latlng.lat.toFixed(5)), Number(e.latlng.lng.toFixed(5)));
+        }
+      });
+
+      updateUserLocationMarker();
+      renderApp(false);
+    }
+
+    function initKakaoMapEngine() {
+      const container = document.getElementById("map");
+      container.innerHTML = "";
+      state.mapEngine = "kakao";
+      const center = new kakao.maps.LatLng(state.userLoc.lat, state.userLoc.lng);
+      state.kakaoMap = new kakao.maps.Map(container, { center, level: 5 });
+      state.kakaoMap.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+
+      document.getElementById("kakao-layer-bar").classList.remove("hidden");
+
+      kakao.maps.event.addListener(state.kakaoMap, "click", mouseEvent => {
+        if (state.pickingLocationOnMap) {
+          const latlng = mouseEvent.latLng;
+          applyPickedLocation(Number(latlng.getLat().toFixed(5)), Number(latlng.getLng().toFixed(5)));
+        }
+      });
+
+      updateUserLocationMarker();
+      renderApp(false);
+      showToast("🗺️ 카카오맵 국내 상세 지도가 연결되었습니다!", "✅");
+    }
+
+    function initMap() {
+      // 카카오맵 SDK 동적 로드 시도 -> 등록 도메인일 경우 카카오맵, 미등록/미리보기일 경우 Leaflet 위성 자동 폴백
+      const script = document.createElement("script");
+      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}&autoload=false`;
+      let settled = false;
+
+      const fallbackTimeout = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          initLeafletFallback();
+        }
+      }, 3000);
+
+      script.onload = () => {
+        if (settled) return;
+        try {
+          if (window.kakao && kakao.maps && typeof kakao.maps.load === "function") {
+            kakao.maps.load(() => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(fallbackTimeout);
+              try {
+                initKakaoMapEngine();
+              } catch (e) {
+                initLeafletFallback();
+              }
+            });
+          } else {
+            settled = true;
+            clearTimeout(fallbackTimeout);
+            initLeafletFallback();
+          }
+        } catch (e) {
+          settled = true;
+          clearTimeout(fallbackTimeout);
+          initLeafletFallback();
+        }
+      };
+
+      script.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallbackTimeout);
+        initLeafletFallback();
+      };
+
+      document.head.appendChild(script);
+    }
+
+    function applyPickedLocation(lat, lng) {
+      state.userLoc = { id: "map_click", name: `지도 지정 (${lat}, ${lng})`, lat, lng };
+      state.pickingLocationOnMap = false;
+      document.getElementById("banner-map-pick").classList.add("hidden");
+      document.getElementById("map").style.cursor = "";
+      document.getElementById("current-location-text").textContent = state.userLoc.name;
+      updateUserLocationMarker();
+      renderApp(false);
+      showToast(`🎯 내 위치가 (${lat}, ${lng})로 확정되었습니다!`, "✅");
+    }
+
+    function setMapCenter(lat, lng, zoomOrLevel = 15) {
+      if (state.mapEngine === "kakao" && state.kakaoMap) {
+        state.kakaoMap.panTo(new kakao.maps.LatLng(lat, lng));
+        state.kakaoMap.setLevel(4);
+      } else if (state.map) {
+        state.map.setView([lat, lng], zoomOrLevel, { animate: true });
+      }
+    }
+
+    function updateUserLocationMarker() {
+      if (state.mapEngine === "kakao" && state.kakaoMap) {
+        if (state.kakaoUserOverlay) state.kakaoUserOverlay.setMap(null);
+        const content = document.createElement("div");
+        content.innerHTML = `<div class="px-2.5 py-1 rounded-full bg-blue-600 border-2 border-white shadow-xl text-white text-[10px] font-extrabold whitespace-nowrap">📍 내 위치</div>`;
+        state.kakaoUserOverlay = new kakao.maps.CustomOverlay({
+          position: new kakao.maps.LatLng(state.userLoc.lat, state.userLoc.lng),
+          content,
+          yAnchor: 1.2,
+          zIndex: 50
+        });
+        state.kakaoUserOverlay.setMap(state.kakaoMap);
+        return;
+      }
+
+      if (!state.map) return;
+      if (state.userMarker) state.map.removeLayer(state.userMarker);
+      const myIcon = L.divIcon({
+        className: "user-gps-marker",
+        html: `<div class="px-2.5 py-1 rounded-full bg-blue-600 border-2 border-white shadow-xl text-white text-[10px] font-extrabold whitespace-nowrap">📍 내 위치</div>`,
+        iconSize: [72, 26],
+        iconAnchor: [36, 13]
+      });
+      state.userMarker = L.marker([state.userLoc.lat, state.userLoc.lng], { icon: myIcon, draggable: true }).addTo(state.map);
+      state.userMarker.on("dragend", () => {
+        const pos = state.userMarker.getLatLng();
+        applyPickedLocation(Number(pos.lat.toFixed(5)), Number(pos.lng.toFixed(5)));
+      });
+    }
+
+    function getStationStats(station) {
+      let available = 0, inUse = 0, broken = 0, rapidAvailable = 0;
+      station.chargers.forEach(c => {
+        if (c.status === "AVAILABLE") { available++; if (c.power >= 50) rapidAvailable++; }
+        else if (c.status === "IN_USE") inUse++;
+        else broken++;
+      });
+      let overallStatus = "AVAILABLE", statusText = "충전 여유";
+      if (available === 0) {
+        overallStatus = broken > 0 ? "BROKEN" : "IN_USE";
+        statusText = broken > 0 ? "이용 불가(고장)" : "만차";
+      } else if (available === 1) {
+        overallStatus = "ALERT";
+        statusText = "혼잡 (1대 남음)";
+      }
+      return {
+        total: station.chargers.length,
+        available, inUse, broken, rapidAvailable, overallStatus, statusText,
+        distance: getDistanceKm(state.userLoc.lat, state.userLoc.lng, station.lat, station.lng)
+      };
+    }
+
+    function getFilteredStations() {
+      return STATIONS_DATA.filter(station => {
+        const stats = getStationStats(station);
+        if (state.filters.search) {
+          const q = state.filters.search.toLowerCase();
+          if (!station.name.toLowerCase().includes(q) && !station.address.toLowerCase().includes(q) && !station.operator.toLowerCase().includes(q)) return false;
+        }
+        if (state.filters.speed === "RAPID" && !station.chargers.some(c => c.power >= 50)) return false;
+        if (state.filters.speed === "SLOW" && !station.chargers.some(c => c.power < 50)) return false;
+        if (state.filters.status === "AVAILABLE" && stats.available === 0) return false;
+        if (state.filters.status === "ALERT" && stats.broken === 0) return false;
+        if (state.filters.operator === "EV" && station.busiId !== "EV") return false;
+        if (state.filters.operator === "ME" && station.busiId !== "ME") return false;
+        if (state.filters.operator === "OTHER" && (station.busiId === "EV" || station.busiId === "ME")) return false;
+        return true;
+      }).sort((a, b) => {
+        const sa = getStationStats(a), sb = getStationStats(b);
+        if (state.filters.sort === "DISTANCE") return parseFloat(sa.distance) - parseFloat(sb.distance);
+        if (state.filters.sort === "AVAILABLE") return sb.available - sa.available;
+        return sb.rapidAvailable - sa.rapidAvailable;
+      });
+    }
+
+    function renderApp(autoFit = false) {
+      const filtered = getFilteredStations();
+      let totalChargers = 0, avail = 0, inUse = 0, broken = 0;
+      filtered.forEach(s => {
+        const st = getStationStats(s);
+        totalChargers += st.total; avail += st.available; inUse += st.inUse; broken += st.broken;
+      });
+
+      document.getElementById("kpi-total-stations").textContent = filtered.length;
+      document.getElementById("kpi-total-chargers").textContent = totalChargers;
+      document.getElementById("kpi-available-chargers").textContent = avail;
+      document.getElementById("kpi-available-rate").textContent = `${totalChargers > 0 ? Math.round((avail / totalChargers) * 100) : 0}%`;
+      document.getElementById("kpi-inuse-chargers").textContent = inUse;
+      document.getElementById("kpi-broken-chargers").textContent = broken;
+      document.getElementById("filtered-count").textContent = filtered.length;
+
+      renderStationList(filtered);
+      updateMapMarkers(filtered, autoFit);
+    }
+
+    function renderStationList(stations) {
+      const container = document.getElementById("station-list-container");
+      if (stations.length === 0) {
+        container.innerHTML = `<div class="py-12 text-center text-xs text-slate-500">조건에 맞는 충전소가 없습니다.</div>`;
+        return;
+      }
+      container.innerHTML = stations.slice(0, 100).map(station => {
+        const stats = getStationStats(station);
+        const badgeBg = stats.overallStatus === "AVAILABLE" ? "bg-emerald-100 text-emerald-800" : (stats.overallStatus === "ALERT" ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800");
+        return `
+          <div data-id="${station.id}" class="station-card bg-white p-3.5 rounded-xl border border-slate-200 hover:border-emerald-400 cursor-pointer transition-all">
+            <div class="flex items-start justify-between">
+              <div>
+                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${station.busiId === "EV" ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-700"}">${station.operator} [${station.busiId}]</span>
+                <h4 class="text-xs font-bold text-slate-900 mt-1">${station.name}</h4>
+                <p class="text-[11px] text-slate-500 mt-0.5">${station.address}</p>
+              </div>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeBg} flex-shrink-0">${stats.statusText}</span>
+            </div>
+            <div class="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span>가용 <strong class="${stats.available > 0 ? "text-emerald-600" : "text-slate-400"}">${stats.available}</strong> / ${stats.total}대 (급속 ${stats.rapidAvailable}대)</span>
+              <div class="flex items-center space-x-2">
+                <span class="font-semibold text-slate-700">${stats.distance} km</span>
+                <button data-detail-id="${station.id}" class="btn-card-detail px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-[10px] font-bold">상세</button>
+              </div>
+            </div>
+          </div>`;
+      }).join("");
+
+      container.querySelectorAll(".station-card").forEach(card => {
+        card.addEventListener("click", e => {
+          const id = card.getAttribute("data-id");
+          if (e.target.closest(".btn-card-detail")) { window.openStationDetail(id); return; }
+          const st = STATIONS_DATA.find(x => x.id === id);
+          if (st) setMapCenter(st.lat, st.lng, 15);
+          if (state.mapEngine === "leaflet" && state.markers[id]) state.markers[id].openPopup();
+        });
+      });
+    }
+
+    function updateMapMarkers(stations, autoFit) {
+      if (state.mapEngine === "kakao" && state.kakaoMap) {
+        state.kakaoOverlays.forEach(ov => ov.setMap(null));
+        state.kakaoOverlays = [];
+        if (state.kakaoInfoWindow) state.kakaoInfoWindow.close();
+
+        const bounds = new kakao.maps.LatLngBounds();
+        stations.slice(0, 250).forEach(station => {
+          const stats = getStationStats(station);
+          const pinColor = stats.overallStatus === "AVAILABLE" ? "#10b981" : (stats.overallStatus === "ALERT" ? "#f59e0b" : "#f43f5e");
+          const pos = new kakao.maps.LatLng(station.lat, station.lng);
+          const el = document.createElement("div");
+          el.className = "marker-2d-wrapper";
+          el.innerHTML = `<div class="px-2.5 py-0.5 rounded-full text-white text-[11px] font-extrabold shadow-md whitespace-nowrap" style="background:${pinColor};border:2px solid #fff;">⚡${stats.available}/${stats.total}</div><div class="marker-2d-tail" style="border-top:6px solid ${pinColor};"></div>`;
+          el.addEventListener("click", () => {
+            if (state.kakaoInfoWindow) state.kakaoInfoWindow.close();
+            const iw = new kakao.maps.InfoWindow({
+              content: `<div style="padding:10px;font-size:12px;min-width:190px;font-family:Pretendard,sans-serif;"><div style="font-weight:700;margin-bottom:2px;">${station.name}</div><div style="color:#64748b;font-size:11px;margin-bottom:6px;">${station.address}</div><div style="font-weight:700;margin-bottom:8px;">가용 ${stats.available} / ${stats.total}대 (${stats.distance} km)</div><button onclick="window.openStationDetail('${station.id}')" style="width:100%;padding:6px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">상세 현황</button></div>`,
+              removable: true
+            });
+            const dummyMarker = new kakao.maps.Marker({ position: pos });
+            iw.open(state.kakaoMap, dummyMarker);
+            state.kakaoInfoWindow = iw;
+          });
+
+          const overlay = new kakao.maps.CustomOverlay({ position: pos, content: el, yAnchor: 1 });
+          overlay.setMap(state.kakaoMap);
+          state.kakaoOverlays.push(overlay);
+          bounds.extend(pos);
+        });
+        if (autoFit && stations.length > 0) state.kakaoMap.setBounds(bounds);
+        return;
+      }
+
+      if (!state.map) return;
+      Object.values(state.markers).forEach(m => state.map.removeLayer(m));
+      state.markers = {};
+      const bounds = L.latLngBounds();
+      stations.slice(0, 250).forEach(station => {
+        const stats = getStationStats(station);
+        const pinColor = stats.overallStatus === "AVAILABLE" ? "#10b981" : (stats.overallStatus === "ALERT" ? "#f59e0b" : "#f43f5e");
+        const icon = L.divIcon({
+          className: "custom-pin",
+          html: `<div class="marker-2d-wrapper"><div class="px-2.5 py-0.5 rounded-full text-white text-[11px] font-extrabold shadow-md whitespace-nowrap" style="background:${pinColor};border:2px solid #fff;">⚡${stats.available}/${stats.total}</div><div class="marker-2d-tail" style="border-top:6px solid ${pinColor};"></div></div>`,
+          iconSize: [48, 28],
+          iconAnchor: [24, 28]
+        });
+        const marker = L.marker([station.lat, station.lng], { icon }).addTo(state.map).bindPopup(`
+          <div class="p-3 text-xs min-w-[200px]">
+            <div class="font-bold text-slate-900 mb-0.5">${station.name}</div>
+            <div class="text-slate-500 text-[11px] mb-2">${station.address}</div>
+            <div class="font-bold mb-2">가용 ${stats.available} / ${stats.total}대 (${stats.distance} km)</div>
+            <button onclick="window.openStationDetail('${station.id}')" class="w-full py-1.5 bg-slate-900 text-white rounded-lg font-semibold">상세 현황</button>
+          </div>`);
+        state.markers[station.id] = marker;
+        bounds.extend([station.lat, station.lng]);
+      });
+      if (autoFit && stations.length > 0) state.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    }
+
+    window.openStationDetail = function(id) {
+      const station = STATIONS_DATA.find(s => s.id === id);
+      if (!station) return;
+      const stats = getStationStats(station);
+      document.getElementById("modal-station-operator").textContent = `${station.operator} (${station.busiId})`;
+      document.getElementById("modal-station-name").textContent = station.name;
+      document.getElementById("modal-station-address").textContent = station.address;
+      document.getElementById("modal-parking-fee").textContent = station.parkingFee;
+      document.getElementById("modal-operating-time").textContent = station.operatingTime;
+      document.getElementById("modal-distance").textContent = `${stats.distance} km`;
+      document.getElementById("modal-connector-types").textContent = [...new Set(station.chargers.map(c => c.type))].join(", ");
+      document.getElementById("modal-slot-count").textContent = stats.total;
+      document.getElementById("modal-api-busiid").textContent = `${station.busiId} (${station.operator})`;
+      document.getElementById("modal-api-statid").textContent = station.statId;
+      document.getElementById("modal-api-zscode").textContent = station.zscode;
+      document.getElementById("modal-api-call").textContent = station.busiCall;
+
+      const diag = document.getElementById("modal-ai-diagnosis");
+      if (stats.available >= 2) {
+        diag.className = "p-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900";
+        diag.innerHTML = `<div><strong>즉시 충전 추천</strong> — 현재 ${stats.available}대 이용 가능합니다.</div>`;
+      } else if (stats.available === 1) {
+        diag.className = "p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900";
+        diag.innerHTML = `<div><strong>혼잡 주의</strong> — 현재 1대만 남아 있습니다.</div>`;
+      } else {
+        diag.className = "p-3.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-900";
+        diag.innerHTML = `<div><strong>헛걸음 위험</strong> — 현재 충전 가능한 슬롯이 없습니다.</div>`;
+      }
+
+      document.getElementById("modal-chargers-list").innerHTML = station.chargers.map(c => {
+        const badge = c.status === "AVAILABLE" ? "bg-emerald-100 text-emerald-800" : (c.status === "IN_USE" ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800");
+        return `<div class="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between"><div><strong>${c.id}호기</strong> · ${c.type} (${c.power}kW)${c.faultReason ? `<div class="text-[11px] text-rose-600">${c.faultReason}</div>` : ""}</div><span class="px-2 py-0.5 rounded text-[10px] font-bold ${badge}">${c.statusName}</span></div>`;
+      }).join("");
+
+      document.getElementById("modal-station-detail").classList.remove("hidden");
+    };
+
+    function showToast(msg, icon = "ℹ️") {
+      const toast = document.getElementById("toast");
+      document.getElementById("toast-message").textContent = msg;
+      document.getElementById("toast-icon").textContent = icon;
+      toast.classList.remove("translate-y-20", "opacity-0");
+      setTimeout(() => toast.classList.add("translate-y-20", "opacity-0"), 2500);
+    }
+
+    function setupListeners() {
+      document.getElementById("btn-fetch-live-api").addEventListener("click", () => fetchLiveKecoData());
+      document.getElementById("select-api-region").addEventListener("change", () => fetchLiveKecoData());
+      document.getElementById("btn-refresh").addEventListener("click", () => { state.countdown = 60; fetchLiveKecoData(); });
+
+      const searchInput = document.getElementById("input-search");
+      const clearBtn = document.getElementById("btn-clear-search");
+      searchInput.addEventListener("input", e => {
+        state.filters.search = e.target.value.trim();
+        clearBtn.classList.toggle("hidden", !state.filters.search);
+        renderApp(false);
+      });
+      clearBtn.addEventListener("click", () => { searchInput.value = ""; state.filters.search = ""; clearBtn.classList.add("hidden"); renderApp(false); });
+
+      document.querySelectorAll("#filter-speed-group .speed-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll("#filter-speed-group .speed-btn").forEach(b => b.className = "speed-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-100 text-slate-600");
+          btn.className = "speed-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-800 text-white";
+          state.filters.speed = btn.getAttribute("data-speed");
+          renderApp(false);
+        });
+      });
+
+      document.querySelectorAll("#filter-status-group .status-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll("#filter-status-group .status-btn").forEach(b => b.className = "status-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-100 text-slate-600");
+          btn.className = "status-btn px-2 py-0.5 text-xs rounded-md font-medium bg-slate-800 text-white";
+          state.filters.status = btn.getAttribute("data-status");
+          renderApp(false);
+        });
+      });
+
+      document.querySelectorAll("#filter-operator-group .op-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll("#filter-operator-group .op-btn").forEach(b => b.className = "op-btn px-2 py-0.5 text-[11px] rounded-md font-medium bg-slate-100 text-slate-600");
+          btn.className = "op-btn px-2 py-0.5 text-[11px] rounded-md font-bold bg-slate-800 text-white";
+          state.filters.operator = btn.getAttribute("data-op");
+          renderApp(true);
+        });
+      });
+
+      document.getElementById("select-sort").addEventListener("change", e => { state.filters.sort = e.target.value; renderApp(false); });
+      document.getElementById("select-sort").addEventListener("change", e => { state.filters.sort = e.target.value; renderApp(false); });
+
+
+      document.querySelectorAll(".klayer-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (state.mapEngine !== "kakao" || !state.kakaoMap) return;
+          const ktype = btn.getAttribute("data-klayer");
+          state.kakaoMap.setMapTypeId(ktype === "HYBRID" ? kakao.maps.MapTypeId.HYBRID : kakao.maps.MapTypeId.ROADMAP);
+          document.querySelectorAll(".klayer-btn").forEach(b => {
+            b.className = b.getAttribute("data-klayer") === ktype
+              ? "klayer-btn px-3 py-1.5 rounded-lg bg-slate-900 text-white font-bold text-xs transition-colors"
+              : "klayer-btn px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors";
+          });
+        });
+      });
+
+      document.getElementById("btn-map-pick-mode").addEventListener("click", () => {
+        state.pickingLocationOnMap = true;
+        document.getElementById("banner-map-pick").classList.remove("hidden");
+        document.getElementById("map").style.cursor = "crosshair";
+      });
+      document.getElementById("btn-cancel-map-pick").addEventListener("click", () => {
+        state.pickingLocationOnMap = false;
+        document.getElementById("banner-map-pick").classList.add("hidden");
+        document.getElementById("map").style.cursor = "";
+      });
+
+      document.getElementById("btn-close-modal").addEventListener("click", () => document.getElementById("modal-station-detail").classList.add("hidden"));
+      document.getElementById("btn-copy-address").addEventListener("click", () => {
+        const addr = document.getElementById("modal-station-address").textContent;
+        if (navigator.clipboard) navigator.clipboard.writeText(addr);
+        showToast("주소가 복사되었습니다.", "📋");
+      });
+
+      document.getElementById("btn-change-location").addEventListener("click", () => document.getElementById("modal-location").classList.remove("hidden"));
+      document.getElementById("btn-close-location-modal").addEventListener("click", () => document.getElementById("modal-location").classList.add("hidden"));
+      document.querySelectorAll(".loc-select-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const mapLoc = {
+            goyang_ilsan: { name: "경기 고양시 일산동구", lat: 37.6583, lng: 126.7644 },
+            goyang_joongbu: { name: "경기 고양시 중부대학교", lat: 37.71385, lng: 126.89042 },
+            gimpo_geolpo: { name: "경기 김포시 걸포북변역", lat: 37.63168, lng: 126.70612 },
+            seoul_gangnam: { name: "서울 강남구 강남역", lat: 37.4979, lng: 127.0276 },
+            seoul_mapo: { name: "서울 마포구 상암동", lat: 37.5683, lng: 126.8972 }
+          };
+          const chosen = mapLoc[btn.getAttribute("data-loc")] || mapLoc.goyang_ilsan;
+          state.userLoc = { id: btn.getAttribute("data-loc"), ...chosen };
+          document.getElementById("current-location-text").textContent = `${state.userLoc.name} (${state.userLoc.lat}, ${state.userLoc.lng})`;
+          updateUserLocationMarker();
+          setMapCenter(state.userLoc.lat, state.userLoc.lng, 13);
+          document.getElementById("modal-location").classList.add("hidden");
+          renderApp(false);
+        });
+      });
+
+      document.getElementById("btn-toggle-stats").addEventListener("click", () => {
+        document.getElementById("modal-stats").classList.remove("hidden");
+        const filtered = getFilteredStations();
+        let avail = 0, inUse = 0, broken = 0;
+        filtered.forEach(s => { const st = getStationStats(s); avail += st.available; inUse += st.inUse; broken += st.broken; });
+        const ctx = document.getElementById("chart-status-breakdown").getContext("2d");
+        if (state.statusChart) state.statusChart.destroy();
+        state.statusChart = new Chart(ctx, {
+          type: "doughnut",
+          data: { labels: ["충전가능", "충전중", "고장/점검"], datasets: [{ data: [avail, inUse, broken], backgroundColor: ["#10b981", "#f59e0b", "#f43f5e"] }] },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+      });
+      document.getElementById("btn-close-stats-modal").addEventListener("click", () => document.getElementById("modal-stats").classList.add("hidden"));
+    }
+
+    // 일일 API 트래픽 한도(개발계정) 보호를 위해 자동 새로고침 폴링을 끄고 수동 클릭 시에만 호출
+    const countdownEl = document.getElementById("refresh-countdown");
+    if (countdownEl) countdownEl.textContent = "(수동)";
+
+    window.addEventListener("DOMContentLoaded", () => {
+      initMap();
+      setupListeners();
+      fetchLiveKecoData("zscode:41280");
+    });
+  </script>
+</body>
+</html>
